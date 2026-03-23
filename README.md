@@ -1,6 +1,6 @@
-# 🎵 YouTube Music Batch Downloader Pro
+# 🎵 Collector Pro — YouTube Music Batch Downloader
 
-> A powerful desktop GUI application for downloading YouTube music in high-quality **MP3** format with **full embedded metadata** — title, artist, album, year, track number, and album cover art.
+> A powerful, modern desktop GUI application for downloading YouTube music in high-quality **MP3** or **Hi-Res native formats** (Opus/M4A) with **full embedded metadata** — title, artist, album, year, track number, and album cover art.
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue?logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows-informational?logo=windows)
@@ -28,16 +28,19 @@
 
 | Feature | Description |
 |---|---|
-| 🎧 **MP3 High Quality** | Downloads audio at 128, 192, or 320 kbps |
+| 🎧 **MP3 & Hi-Res Option** | Standard MP3 (128-320 kbps) or switch to **Hi-Res Audio** for native lossless streams (Opus/M4A) |
 | 🏷️ **Full Metadata** | Embeds Title, Artist, Album, Year, Track # via ID3v2.3 |
 | 🖼️ **Album Art** | Embeds YouTube thumbnail as album cover |
-| 📂 **Auto-Sort** | Organises files into `Artist/Song.mp3` folder structure |
-| 📋 **Batch Download** | Paste multiple URLs or import from a `.txt` file |
+| 📂 **Auto-Sort** | Organises files into `Artist/Song.ext` folder structure |
+| 📋 **Batch Download** | Paste multiple URLs or click **Import .txt** to load links |
 | 🔄 **Incremental Sync** | Skips already-downloaded tracks via archive file |
-| 🍪 **Cookie Support** | Access private playlists or YouTube Premium content |
+| 🍪 **Premium Access** | In-app entry for authentication cookies to access private/premium content |
 | 🔧 **FFmpeg Auto-Install** | Downloads & extracts FFmpeg automatically if missing |
+| 🌓 **Theme Toggle** | Switch between Light and Dark mode |
+| 📊 **Live Statistics** | Real-time monitoring of Total Tracks, Library Size, and Sync Speed |
+| ⚙️ **In-App Management** | Dedicated tabs to view **Download History** and manage **Settings** |
 | 🛑 **Stop Anytime** | Cancel in-progress downloads instantly |
-| 📜 **Download Log** | Live in-app log of every download and status |
+| 📜 **Process Log** | Live in-app log of every download and status |
 
 ---
 
@@ -91,26 +94,29 @@ pip install customtkinter yt-dlp
 
 ## 🖥️ Usage
 
-1. **Paste YouTube links** into the text box — one URL per line.
-   - Supports: single tracks, playlists, YouTube Music links.
-2. *(Optional)* Click **Import TXT Links** to load URLs from a text file.
-3. **Select Save Path** — defaults to `~/Music/YT Music Downloads/`.
-4. **Choose Audio Quality**: 320 kbps / 192 kbps / 128 kbps.
-5. Toggle **Auto-sort into artist folders** and **Incremental Sync** as needed.
-6. Click **Start Download** and monitor progress in the log panel.
-7. Click **Stop Download** at any time to cancel immediately.
+1. **Paste YouTube links** into the top text box — one URL per line.
+   - Supports: single tracks, playlists, and YouTube Music links.
+2. *(Optional)* Click **📄 Import .txt** to load URLs from a text file.
+3. **Select Save Destination** in the Configuration panel (defaults to `~/Music/YT Music Downloads/`).
+4. **Choose Output Quality**: 320 kbps / 192 kbps / 128 kbps.
+5. *(Optional)* Toggle **✔ Hi-Res Audio** to download native streams (Opus/M4A) rather than re-encoding to MP3.
+6. Toggle **Auto-sort Artist Folder** and **Incremental Sync** as needed.
+7. Click **▶ Start Download** and monitor progress in the Process Log panel.
+8. Click **⬛ Stop** at any time to cancel immediately.
 
 ---
 
 ## ⚙️ Configuration
 
-Settings are saved automatically to `~/.yt_music_downloader/downloader_config.json`.
+App configurations and data are saved to `~/.yt_music_downloader/`. You can quickly manage application settings from the built-in **Settings** menu.
 
-| Setting | Default | Description |
-|---|---|---|
-| `save_path` | `~/Music/YT Music Downloads` | Output folder for downloaded files |
-| `audio_quality` | `Highest Quality (320kbps)` | Bitrate for MP3 output |
-| `output_format` | `MP3` | Locked to MP3 for full metadata support |
+| System File | Description |
+|---|---|
+| `downloader_config.json` | Saves user preferences like save path and audio quality |
+| `download_history.json` | Stores the user's download history |
+| `download_archive.txt` | yt-dlp archive used for Incremental Sync |
+
+From the **Settings** menu, you can toggle themes, reinstall FFmpeg, clear history, or reset the configuration.
 
 ---
 
@@ -133,15 +139,9 @@ FFmpeg not found → Prompt shown → User accepts → Auto-download from GitHub
 
 ## 📜 Download History & Archive
 
-All files are stored in `~/.yt_music_downloader/`:
+All historical data and tracker files are saved in `~/.yt_music_downloader/`.
 
-| File | Purpose |
-|---|---|
-| `downloader_config.json` | Saved app settings |
-| `download_history.json` | Log of every downloaded file with timestamp |
-| `download_archive.txt` | yt-dlp archive for incremental sync (skips re-downloads) |
-
-Click **View Download History** in the app to browse past downloads.
+Click the **⊞ View History** button on the dashboard or use the sidebar's **Download History** tab to browse all your past downloads right within the app.
 
 ---
 
