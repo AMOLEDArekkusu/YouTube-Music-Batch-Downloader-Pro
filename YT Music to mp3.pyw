@@ -1332,7 +1332,7 @@ class YTMusicDownloaderPro(ctk.CTk):
                 'progress_hooks': [self.progress_hook],
                 'http_headers': http_headers,
                 'postprocessor_args': {
-                    'FFmpegExtractAudio': ['-id3v2_version', '3', '-write_id3v1', '1']
+                    'FFmpegExtractAudio': ['-id3v2_version', '3', '-write_id3v1', '0']
                 }
             }
 
