@@ -20,6 +20,11 @@ if os.name == 'nt':
 APP_DATA_FOLDER = os.path.join(os.path.expanduser("~"), ".yt_music_downloader")
 os.makedirs(APP_DATA_FOLDER, exist_ok=True)
 
+# Ensure Deno (JS runtime for yt-dlp signature solving) is on PATH
+_deno_bin = os.path.join(os.path.expanduser("~"), ".deno", "bin")
+if os.path.isdir(_deno_bin) and _deno_bin not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = _deno_bin + os.pathsep + os.environ.get("PATH", "")
+
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 CONFIG_FILE  = os.path.join(APP_DATA_FOLDER, "downloader_config.json")
@@ -77,6 +82,7 @@ class YTMusicDownloaderPro(ctk.CTk):
 
         self.downloading      = False
         self.ffmpeg_available = False
+        self._cookie_browser  = "chrome"   # default: extract cookies from Chrome
         self._total_tracks    = self._load_total_tracks()
         self._lib_size_str    = self._calculate_library_size()
         self._avg_speed_str   = "—"
@@ -960,6 +966,7 @@ class YTMusicDownloaderPro(ctk.CTk):
                     config = json.load(f)
                     self.save_path = config.get("save_path", self.save_path)
                     self.quality_var.set(config.get("audio_quality", "Highest Quality (320kbps)"))
+                    self._cookie_browser = config.get("cookie_browser", "chrome")
             except Exception:
                 pass
 
@@ -969,7 +976,8 @@ class YTMusicDownloaderPro(ctk.CTk):
                 json.dump({
                     "save_path": self.save_path,
                     "output_format": "MP3",
-                    "audio_quality": self.quality_var.get()
+                    "audio_quality": self.quality_var.get(),
+                    "cookie_browser": getattr(self, '_cookie_browser', 'chrome')
                 }, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
@@ -1027,6 +1035,7 @@ class YTMusicDownloaderPro(ctk.CTk):
             self.add_history(filename)
             # Update track counter
             self._total_tracks += 1
+            self._downloads_this_session += 1
             self._lib_size_str = self._calculate_library_size()
             self.after(0, self._refresh_stats)
 
@@ -1199,6 +1208,28 @@ class YTMusicDownloaderPro(ctk.CTk):
             ffmpeg_btn = ctk.CTkButton(app_card, text="Recheck / Install", command=self.check_ffmpeg_on_startup, width=120, fg_color=self.CARD, hover_color=self.CARD_BORDER, text_color=self.TEXT, border_width=1, border_color=self.CARD_BORDER)
             ffmpeg_btn.grid(row=2, column=1, sticky="e", padx=18, pady=8)
 
+            # Browser Cookies — auto-extract login cookies to bypass bot detection
+            ctk.CTkLabel(app_card, text="Browser Cookies", font=("Segoe UI", 12), text_color=self.TEXT).grid(row=3, column=0, sticky="w", padx=18, pady=8)
+            self._cookie_browser_var = ctk.StringVar(value=getattr(self, '_cookie_browser', 'chrome'))
+            cookie_menu = ctk.CTkOptionMenu(
+                app_card,
+                values=["chrome", "firefox", "edge", "brave", "opera", "none"],
+                variable=self._cookie_browser_var,
+                command=self._on_cookie_browser_change,
+                width=120,
+                fg_color=self.TOPBAR_INPUT,
+                button_color=self.CARD_BORDER,
+                button_hover_color=self.CARD_BORDER,
+                text_color=self.TEXT,
+                dropdown_fg_color=self.CARD,
+                dropdown_text_color=self.TEXT,
+                dropdown_hover_color=self.CARD_BORDER,
+                corner_radius=8)
+            cookie_menu.grid(row=3, column=1, sticky="e", padx=18, pady=8)
+            ctk.CTkLabel(app_card, text="Auto-extract login session to bypass YouTube bot detection",
+                         font=("Segoe UI", 10), text_color=self.SUBTEXT).grid(
+                row=4, column=0, columnspan=2, sticky="w", padx=18, pady=(0, 12))
+
             # Data Management Card
             data_card = self._card(content)
             data_card.grid(row=1, column=0, sticky="ew", pady=(0, 16))
@@ -1235,6 +1266,15 @@ class YTMusicDownloaderPro(ctk.CTk):
                 lbl.grid(row=0, column=0, pady=20)
             messagebox.showinfo("Success", "Download history cleared.")
 
+    def _on_cookie_browser_change(self, choice):
+        """Called when the browser cookie dropdown is changed."""
+        self._cookie_browser = choice
+        self.save_config()
+        if choice == "none":
+            self.log("🍪 Browser cookies disabled — will use pasted cookies only")
+        else:
+            self.log(f"🍪 Browser cookies set to: {choice}")
+
     def _reset_config(self):
         if messagebox.askyesno("Reset Configuration", "Are you sure you want to reset all settings to default?"):
             if os.path.exists(CONFIG_FILE):
@@ -1262,9 +1302,75 @@ class YTMusicDownloaderPro(ctk.CTk):
 
     # ─────────────────────────────── Download logic ───────────────────────────
 
+    class _YDLLogger:
+        """Route yt-dlp log messages to the app's Process Log."""
+        def __init__(self, app):
+            self._app = app
+            self._consecutive_bot_errors = 0
+            self._max_bot_errors = 5
+            self.bot_abort = False
+
+        def debug(self, msg):
+            # yt-dlp sends info-level messages via debug when quiet=True
+            if msg.startswith('[download]'):
+                self._app.after(0, lambda m=msg: self._app.log(m))
+
+        def info(self, msg):
+            self._app.after(0, lambda m=msg: self._app.log(m))
+
+        def warning(self, msg):
+            self._app.after(0, lambda m=msg: self._app.log(f"⚠️  {m}"))
+
+        def error(self, msg):
+            self._app.after(0, lambda m=msg: self._app.log(f"❌ {m}"))
+            # Detect bot / sign-in errors and abort after too many consecutive ones
+            if "Sign in to confirm" in msg or "bot" in msg.lower():
+                self._consecutive_bot_errors += 1
+                if self._consecutive_bot_errors >= self._max_bot_errors:
+                    self.bot_abort = True
+                    self._app.downloading = False
+                    self._app.after(0, lambda: self._app.log(
+                        f"\n🛑 ABORTED: YouTube requires sign-in (bot detection).\n"
+                        f"   {self._consecutive_bot_errors} consecutive tracks were blocked.\n"
+                        f"\n"
+                        f"   ► Fix: Go to Settings → Browser Cookies and select\n"
+                        f"     the browser where you're signed in to YouTube.\n"
+                        f"   ► Or paste Netscape cookies in the Premium Access box.\n"))
+                    self._app.after(0, lambda: messagebox.showerror(
+                        "Authentication Required",
+                        "YouTube is blocking downloads (bot detection).\n\n"
+                        "Go to Settings → Browser Cookies and select the browser\n"
+                        "where you are signed in to YouTube / YouTube Music.\n\n"
+                        "This lets yt-dlp use your login session."))
+            else:
+                self._consecutive_bot_errors = 0
+
+    def _get_cookie_opts(self):
+        """Build cookie-related yt-dlp options based on user settings."""
+        opts = {}
+        # 1. Try browser cookies (preferred — most reliable)
+        browser = getattr(self, '_cookie_browser', 'edge')
+        if browser and browser != 'none':
+            opts['cookiesfrombrowser'] = (browser,)
+            self.log(f"🍪 Using cookies from browser: {browser}")
+            return opts  # browser cookies take priority, no need for cookie file
+        # 2. Fall back to pasted Netscape cookies only when browser is 'none'
+        cookie_val = self.cookie_entry.get("1.0", "end").strip()
+        default_placeholder = "Paste netscape-formatted cookies..."
+        if cookie_val and cookie_val != default_placeholder:
+            cookie_file = os.path.join(APP_DATA_FOLDER, "cookies.txt")
+            try:
+                with open(cookie_file, "w", encoding="utf-8") as f:
+                    f.write(cookie_val)
+                opts['cookiefile'] = cookie_file
+                self.log("🍪 Using pasted Netscape cookies")
+            except Exception as e:
+                self.log(f"⚠️  Could not write cookie file: {e}")
+        return opts
+
     def download_task(self, urls):
         if not self.is_ffmpeg_installed():
-            self.log("❌ ERROR: FFmpeg is required.")
+            self.after(0, lambda: self.log("❌ ERROR: FFmpeg is required."))
             self.after(0, lambda: messagebox.showerror("Error", "FFmpeg is required. Please install it."))
             self.after(0, self.update_ffmpeg_status_ui)
             return
@@ -1286,14 +1392,11 @@ class YTMusicDownloaderPro(ctk.CTk):
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                           'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
-        cookie_val = self.cookie_entry.get("1.0", "end").strip()
-        default_placeholder = "Paste netscape-formatted cookies..."
-        if cookie_val and cookie_val != default_placeholder:
-            http_headers['Cookie'] = cookie_val
+
+        # Create custom logger to show errors in the Process Log
+        ydl_logger = self._YDLLogger(self)
 
         if hires_on:
-            # Hi-Res mode: keep the best native audio stream without re-encoding
-            # Prefer opus (webm) > m4a > any other audio — no lossy transcode
             ydl_opts = {
                 'format': 'bestaudio[ext=opus]/bestaudio[ext=m4a]/bestaudio/best',
                 'postprocessors': [
@@ -1307,12 +1410,12 @@ class YTMusicDownloaderPro(ctk.CTk):
                 'noplaylist': False,
                 'quiet': True,
                 'ignoreerrors': True,
-                'no_warnings': True,
+                'no_warnings': False,
                 'progress_hooks': [self.progress_hook],
                 'http_headers': http_headers,
+                'logger': ydl_logger,
             }
         else:
-            # Standard mode: re-encode to MP3 at selected bitrate
             ydl_opts = {
                 'format': 'bestaudio/best',
                 'postprocessors': [
@@ -1328,38 +1431,146 @@ class YTMusicDownloaderPro(ctk.CTk):
                 'noplaylist': False,
                 'quiet': True,
                 'ignoreerrors': True,
-                'no_warnings': True,
+                'no_warnings': False,
                 'progress_hooks': [self.progress_hook],
                 'http_headers': http_headers,
+                'logger': ydl_logger,
                 'postprocessor_args': {
-                    'FFmpegExtractAudio': ['-id3v2_version', '3', '-write_id3v1', '0']
+                    'FFmpegExtractAudio': ['-id3v2_version', '3', '-write_id3v1', '1']
                 }
             }
+
+        # Inject cookie options
+        cookie_opts = self._get_cookie_opts()
+        ydl_opts.update(cookie_opts)
 
         if self.increment_var.get():
             ydl_opts['download_archive'] = ARCHIVE_FILE
 
         if hires_on:
-            self.log("Starting download in Hi-Res mode (native lossless stream — no re-encode)...")
+            self.after(0, lambda: self.log("Starting download in Hi-Res mode (native lossless stream — no re-encode)..."))
         else:
-            self.log(f"Starting download with FULL METADATA (MP3, {selected_bitrate}kbps)...")
+            self.after(0, lambda b=selected_bitrate: self.log(f"Starting download with FULL METADATA (MP3, {b}kbps)..."))
+
+        def _do_download(opts):
+            """Run yt-dlp download with locked-file workaround for browser cookies."""
+            # On Windows, Edge/Chrome lock their cookie DB while running.
+            # yt-dlp uses shutil.copy() which fails on locked files.
+            # Workaround: temporarily patch shutil.copyfile to use Win32 API
+            # with FILE_SHARE_READ|WRITE|DELETE to read locked files.
+            _original_copyfile = shutil.copyfile
+
+            if os.name == 'nt':
+                def _patched_copyfile(src, dst, *args, **kwargs):
+                    try:
+                        return _original_copyfile(src, dst, *args, **kwargs)
+                    except PermissionError:
+                        # Use Win32 CreateFileW with full sharing to read locked files
+                        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+                        GENERIC_READ    = 0x80000000
+                        FILE_SHARE_ALL  = 0x07  # READ | WRITE | DELETE
+                        OPEN_EXISTING   = 3
+                        INVALID_HANDLE  = ctypes.c_void_p(-1).value
+
+                        h = kernel32.CreateFileW(
+                            str(src), GENERIC_READ, FILE_SHARE_ALL,
+                            None, OPEN_EXISTING, 0, None)
+                        if h == INVALID_HANDLE:
+                            raise ctypes.WinError(ctypes.get_last_error())
+                        try:
+                            buf_size = 65536
+                            buf = ctypes.create_string_buffer(buf_size)
+                            bytes_read = ctypes.c_ulong()
+                            data = bytearray()
+                            while True:
+                                ok = kernel32.ReadFile(
+                                    h, buf, buf_size,
+                                    ctypes.byref(bytes_read), None)
+                                if bytes_read.value == 0:
+                                    break
+                                data.extend(buf[:bytes_read.value])
+                                if not ok:
+                                    break
+                        finally:
+                            kernel32.CloseHandle(h)
+                        with open(dst, 'wb') as f:
+                            f.write(data)
+                        return dst
+                shutil.copyfile = _patched_copyfile
+
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    self.after(0, lambda: self.log("Parsing links and extracting metadata..."))
+                    ydl.download(urls)
+            finally:
+                shutil.copyfile = _original_copyfile
+            return True
+
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                self.log("Parsing links and extracting metadata...")
-                ydl.download(urls)
+            _do_download(ydl_opts)
             if self.downloading:
-                if hires_on:
-                    self.log("🎉 All tasks completed! Files saved in native Hi-Res format (opus/m4a).")
+                if self._downloads_this_session > 0:
+                    if hires_on:
+                        self.after(0, lambda: self.log(f"🎉 All tasks completed! {self._downloads_this_session} file(s) saved in native Hi-Res format."))
+                    else:
+                        self.after(0, lambda n=self._downloads_this_session: self.log(f"🎉 All tasks completed! {n} MP3(s) saved with full metadata."))
+                    self.after(0, lambda: messagebox.showinfo(
+                        "Completed", f"{self._downloads_this_session} song(s) downloaded with full metadata!"))
                 else:
-                    self.log("🎉 All tasks completed! MP3s have Title, Artist, Album, Year & Cover Art.")
-                self.after(0, lambda: messagebox.showinfo(
-                    "Completed", "All songs downloaded with full metadata!"))
+                    self.after(0, lambda: self.log("⚠️ Download finished but no files were saved. Check errors above."))
+                    self.after(0, lambda: messagebox.showwarning(
+                        "No Downloads", "No files were downloaded. Check the Process Log for errors."))
+            elif ydl_logger.bot_abort:
+                pass  # Message already shown by the logger
+            else:
+                self.after(0, lambda: self.log("Download stopped."))
         except yt_dlp.utils.DownloadCancelled:
-            self.log("🛑 Download cancelled by user.")
+            self.after(0, lambda: self.log("🛑 Download cancelled by user."))
         except Exception as e:
-            if self.downloading:
-                self.log(f"❌ Error: {str(e)}")
-                self.after(0, lambda: messagebox.showerror("Error", f"Download failed: {str(e)}"))
+            err_str = str(e).lower()
+            # Cookie extraction failed (browser locked the DB) — retry without browser cookies
+            if 'cookie' in err_str and 'cookiesfrombrowser' in ydl_opts:
+                browser = ydl_opts['cookiesfrombrowser'][0] if isinstance(ydl_opts.get('cookiesfrombrowser'), tuple) else '?'
+                self.after(0, lambda b=browser: self.log(
+                    f"\n⚠️  Could not extract cookies from {b} (browser is running and locked).\n"
+                    f"   TIP: Close {b}, then retry. Or paste cookies in the Premium Access box.\n"
+                    f"   Retrying without browser cookies...\n"))
+                # Remove browser cookie option and retry
+                ydl_opts.pop('cookiesfrombrowser', None)
+                try:
+                    _do_download(ydl_opts)
+                    if self.downloading:
+                        if self._downloads_this_session > 0:
+                            if hires_on:
+                                self.after(0, lambda: self.log(f"🎉 Completed! {self._downloads_this_session} file(s) saved in Hi-Res format."))
+                            else:
+                                self.after(0, lambda n=self._downloads_this_session: self.log(f"🎉 Completed! {n} MP3(s) saved with full metadata."))
+                            self.after(0, lambda: messagebox.showinfo(
+                                "Completed", f"{self._downloads_this_session} song(s) downloaded!"))
+                        else:
+                            self.after(0, lambda: self.log("⚠️ Download finished but no files were saved. Check errors above."))
+                            self.after(0, lambda: messagebox.showwarning(
+                                "No Downloads", "No files were downloaded. Check the Process Log for errors."))
+                    elif ydl_logger.bot_abort:
+                        pass
+                    else:
+                        self.after(0, lambda: self.log("Download stopped."))
+                except yt_dlp.utils.DownloadCancelled:
+                    self.after(0, lambda: self.log("🛑 Download cancelled by user."))
+                except Exception as e2:
+                    import traceback
+                    tb2 = traceback.format_exc()
+                    if self.downloading:
+                        self.after(0, lambda: self.log(f"❌ Error: {str(e2)}"))
+                        self.after(0, lambda t=tb2: self.log(f"   Traceback:\n{t}"))
+                        self.after(0, lambda: messagebox.showerror("Error", f"Download failed: {str(e2)}"))
+            else:
+                import traceback
+                tb = traceback.format_exc()
+                if self.downloading:
+                    self.after(0, lambda: self.log(f"❌ Error: {str(e)}"))
+                    self.after(0, lambda t=tb: self.log(f"   Traceback:\n{t}"))
+                    self.after(0, lambda: messagebox.showerror("Error", f"Download failed: {str(e)}"))
         finally:
             self.downloading = False
             self.after(0, lambda: self.download_btn.configure(state="normal"))
@@ -1370,7 +1581,6 @@ class YTMusicDownloaderPro(ctk.CTk):
             self.update_ffmpeg_status_ui()
             messagebox.showerror("Error", "FFmpeg is not installed.")
             return
-        # Support both single-line Entry and multiline via newlines in clipboard
         url_text = self.url_text.get().strip()
         if not url_text:
             messagebox.showwarning("Notice", "Please enter a download link!")
@@ -1379,9 +1589,11 @@ class YTMusicDownloaderPro(ctk.CTk):
         self.downloading = True
         self._speed_samples = []
         self._avg_speed_str = "—"
+        self._downloads_this_session = 0
         self._refresh_stats()
         self.download_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
+        self.log(f"📥 Starting download for {len(urls)} URL(s)...")
         threading.Thread(target=self.download_task, args=(urls,), daemon=True).start()
 
 
